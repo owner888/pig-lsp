@@ -10,7 +10,7 @@
 pig install git:github.com/owner888/pig-lsp
 ```
 
-然后为你用到的语言装好对应的语言服务器（见下文）。本包没有任何 Composer 依赖。
+然后为你用到的语言装好对应的语言服务器（见下文），或者等 pig-lsp 第一次用到时让它问你要不要装。本包没有任何 Composer 依赖。
 
 ## 工具
 
@@ -51,6 +51,7 @@ src/PayFactory.php:15:29 error: Class "AliPayy" not found [phpactor]
 
 - `/lsp`——正在运行的服务器、它们的根目录、正在忙什么，以及某个服务器为什么失败（附 stderr 末尾）。
 - `/lsp-restart [语言]`——停止全部（或某一个）服务器并重新读取配置，下一次查询会重新启动。
+- `/lsp-install [语言]`——安装缺失的服务器（先询问，见下文）。不带语言时：本项目需要的那些。
 
 ### Skill
 
@@ -60,7 +61,7 @@ src/PayFactory.php:15:29 error: Class "AliPayy" not found [phpactor]
 
 ## 语言服务器
 
-使用 `PATH` 上找到的第一个。
+使用找到的第一个：先找 `PATH`，再找安装器常用但往往不在 `PATH` 上的目录（composer 全局 `vendor/bin`、`~/go/bin`、`~/.cargo/bin`）。
 
 | 语言 | 服务器 | 安装 |
 | --- | --- | --- |
@@ -73,7 +74,26 @@ src/PayFactory.php:15:29 error: Class "AliPayy" not found [phpactor]
 | Go | `gopls` | `go install golang.org/x/tools/gopls@latest` |
 | Java | `jdtls` | `brew install jdtls` |
 
-查询一个没装服务器的语言的文件时，工具会直接说明，并给出安装命令。
+### 服务器没装时
+
+工具第一次需要一个没装的服务器时，pig 会问你——每种语言每个会话只问一次：
+
+```
+Install phpactor?
+No php language server is installed, so pig falls back to grep for …
+pig-lsp can install phpactor by running:
+    composer global require phpactor/phpactor
+This changes your global composer environment. …
+```
+
+- **是**：命令在后台运行（状态栏显示 `LSP: installing phpactor…`，最长 5 分钟，Esc 可中止），然后找到服务器——在 `PATH` 上，或在安装器说的安装目录里（`composer global config bin-dir`、`go env GOPATH`、`npm prefix -g`）——原来的查询接着完成。装在 `PATH` 之外也能用（启动时把它的目录加到服务器进程的 `PATH` 前面，phpactor 的诊断需要这个），结果里会建议把该目录加进你的 `PATH`。
+- **否**：本会话不再询问；工具告诉模型服务器没装、改用 grep。
+- **安装失败**：显示安装器输出的最后几行，本会话不再尝试。
+- 询问期间同时到达的多个调用等待同一个回答：只问一次，而不是每个调用问一次。
+- 只提供上表里的命令，并且只在对应安装器（composer、npm、rustup、go、brew）本身已安装时提供；没有 composer 装 phpactor 时才提供 intelephense，jdtls 只在 macOS 上提供，Dart 从不提供（请安装 SDK）。你自己配置的服务器（`command`）由你自己安装。其余情况只显示安装提示。
+- 没有 UI 时（`pig -p`、没有 UI 的 RPC）不询问、不安装。
+
+无论哪种情况，模型都会被告知不要自己安装服务器，而是退回 grep，并说明结果是文本匹配。`/lsp` 会把缺失的服务器标为可安装、已拒绝或安装失败；`/lsp-install` 会再问一次。
 
 PHP 推荐 phpactor：免费，能找到接口和接口方法的实现。intelephense 免费版不提供“转到实现”（这时 `lsp_implementation` 会说明并建议改用 `lsp_references`）。phpactor 启动后会在后台为项目建索引；大项目上，最初一分钟内的实现和引用查询可能不完整（服务器报告仍在索引时，工具会注明）。
 
@@ -107,6 +127,7 @@ PHP 推荐 phpactor：免费，能找到接口和接口方法的实现。intelep
 | `servers.<语言>.settings` | | 回答 `workspace/configuration`，启动后也会发送一次 |
 | `servers.<语言>.extensions` | | 它负责的文件扩展名（非内置服务器用） |
 | `servers.<语言>.rootMarkers` | 内置 | 标识项目根目录的文件（`composer.json`、`pubspec.yaml`……） |
+| `servers.<语言>.installers` | 内置 | `/lsp-install` 可以运行的命令：`[{"binary": "zls", "with": "brew", "command": ["brew", "install", "zls"]}]`——只在 `with` 已安装时提供，且只用于通过 `candidates`（`[["zls"]]`）查找的服务器，不用于你自己的 `command` |
 | `servers.<语言>.disabled` | `false` | 不启动它 |
 | `servers.<语言>.diagnosticsSettle` | `400` | 服务器安静多少毫秒后，编辑的错误才算最终结果 |
 | `autoInjectDiagnostics`（或 `autoDiagnostics`） | `true` | `true`、`false` 或语言列表 |

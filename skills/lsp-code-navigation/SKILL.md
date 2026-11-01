@@ -41,4 +41,6 @@ When changing such a method, change it in the interface and in every implementat
 
 ## When the server is not there
 
-A tool says so — not installed (with the install command), still starting (try again shortly), or failed (`/lsp` shows why). Then fall back to grep, and say the results are textual. `/lsp` lists the servers; `/lsp-restart` restarts them after a configuration change.
+A tool says so — not installed, still starting (try again shortly), or failed (`/lsp` shows why). Then fall back to grep, and say the results are textual.
+
+A server that is not installed is the user's to install: pig asks them when a tool first needs it, and the tool's answer says whether they were asked, declined, or the install failed. Do not install a language server yourself with bash (`composer global require`, `npm install -g`, `go install`, …) — it changes the user's global environment. If the user wants one, `/lsp-install` installs it. `/lsp` lists the servers; `/lsp-restart` restarts them after a configuration change.

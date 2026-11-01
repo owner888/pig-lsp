@@ -6,6 +6,7 @@ namespace PigLsp;
 
 use Fiber;
 use Pig\Ai\TextContent;
+use Pig\Async\AbortSignal;
 use Pig\CodingAgent\Extensions\ExtensionApi;
 use Pig\CodingAgent\Hooks\Events\ToolResultEvent;
 use Pig\CodingAgent\Hooks\HookContext;
@@ -13,7 +14,8 @@ use Pig\CodingAgent\Hooks\Results\ToolResultEventResult;
 use Throwable;
 
 /**
- * The wiring: tools, the read/write/edit hook, `/lsp` and `/lsp-restart`, start and stop.
+ * The wiring: tools, the read/write/edit hook, `/lsp`, `/lsp-restart` and `/lsp-install`, start and
+ * stop.
  *
  * One manager per working directory, made on first use, because the extension is loaded before
  * the session knows its directory and settings.
@@ -25,14 +27,20 @@ final class Extension
 
     private bool $shutdownRegistered = false;
 
+    private readonly Installer $installer;
+
     public function __construct(private readonly ExtensionApi $pi)
     {
+        $this->installer = new Installer();
     }
 
     public static function register(ExtensionApi $pi): self
     {
         $extension = new self($pi);
-        $tools = new Tools(fn (string $cwd): LspManager => $extension->manager($cwd));
+        $tools = new Tools(
+            fn (string $cwd): LspManager => $extension->manager($cwd),
+            fn (LspNotInstalled $missing, HookContext $ctx, ?AbortSignal $signal): string => $extension->notInstalled($missing, $ctx, $signal),
+        );
 
         foreach ($tools->definitions(
             fn (): float => $extension->lastManager()?->config()->diagnosticsWait() ?? 3.0,
@@ -72,6 +80,10 @@ final class Extension
             );
         }, 'Stop language servers (all, or one: /lsp-restart php) and re-read the configuration');
 
+        $pi->registerCommand('lsp-install', function (string $args, HookContext $ctx) use ($extension): void {
+            $extension->installCommand(trim($args), $ctx);
+        }, 'Install a missing language server (asks first): /lsp-install php');
+
         return $extension;
     }
 
@@ -103,7 +115,127 @@ final class Extension
         } catch (Throwable) {
         }
 
-        return new Config($cwd, $settings);
+        return new Config($cwd, $settings, $this->installer->binDirs());
+    }
+
+    /**
+     * A tool found $missing's server not installed: offer to install it, and say how it went.
+     *
+     * @return string a note for the tool's result when the server is now installed (the call then
+     *         goes on); otherwise this throws what the model should be told
+     * @throws LspError
+     */
+    public function notInstalled(LspNotInstalled $missing, HookContext $ctx, ?AbortSignal $signal = null): string
+    {
+        $config = $this->manager($ctx->cwd)->config();
+        $outcome = $this->installer->offer($missing->key, $config, $ctx, $signal);
+
+        if ($outcome['state'] === Installer::INSTALLED) {
+            $this->reconfigureAll();
+
+            return self::installedNote($missing->key, $outcome['detail']);
+        }
+
+        throw new LspError(self::notInstalledMessage($missing->key, $outcome, $config));
+    }
+
+    /**
+     * What the model is told when a server is missing and stays missing. The same last sentence
+     * every time: a model told how a server is installed tends to install it, and that is the
+     * user's call, not the model's.
+     *
+     * @param array{state: string, detail: string} $outcome
+     */
+    public static function notInstalledMessage(string $key, array $outcome, Config $config): string
+    {
+        $option = $config->installOption($key);
+        $server = $option['binary'] ?? "{$key} language server";
+        $why = match ($outcome['state']) {
+            Installer::DECLINED => "The user was asked whether to install {$server} and declined for this session.",
+            Installer::FAILED => "The user agreed to install {$server}, but installing it failed: {$outcome['detail']}",
+            Installer::STOPPED => "Installing {$server} was stopped before it finished.",
+            Installer::NO_UI => 'Nothing was installed: this session has no one to ask (servers are only installed when the user agrees).',
+            default => 'There is nothing pig-lsp can install it with, so the user has been shown how to install it.',
+        };
+        $forUser = $outcome['state'] === Installer::NO_UI || $outcome['state'] === Installer::UNAVAILABLE
+            ? ' If the user asks how to get one: ' . self::hintOnly($config->installHint($key))
+            : '';
+
+        return "No {$key} language server is installed. {$why}{$forUser}\n"
+            . 'Do not install it yourself with bash (or any other tool) — that changes the user\'s global environment and is theirs to decide. '
+            . 'Use grep and read instead, and say the results are textual matches, not from a language server.';
+    }
+
+    /** What a tool result says above its answer when the server was installed for it. */
+    private static function installedNote(string $key, string $binary): string
+    {
+        $note = "(The {$key} language server was missing; the user agreed and pig-lsp installed it: {$binary}.";
+
+        return $note . (Config::onPath(dirname($binary)) ? ')' : ' ' . Installer::pathAdvice($binary) . ' Tell the user.)');
+    }
+
+    /** The prose part of an install hint, without the "No … is installed (looked for …)." lead. */
+    private static function hintOnly(string $hint): string
+    {
+        $parts = explode('). ', $hint, 2);
+
+        return count($parts) === 2 ? $parts[1] : $hint;
+    }
+
+    /** `/lsp-install [language]`: the user asks for it, so it is asked again even after a no. */
+    public function installCommand(string $language, HookContext $ctx): void
+    {
+        $manager = $this->manager($ctx->cwd);
+        $config = $manager->config();
+
+        if ($language !== '') {
+            $keys = [$config->serverKeyForLanguage($language) ?? $language];
+        } else {
+            $keys = array_values(array_filter($manager->projectServerKeys(), static fn (string $key): bool => $config->command($key) === null));
+        }
+
+        $keys = array_values(array_filter($keys, static fn (string $key): bool => in_array($key, $config->serverKeys(), true)));
+
+        if ($keys === []) {
+            $missing = array_values(array_filter($config->serverKeys(), static fn (string $key): bool => $config->command($key) === null));
+            $ctx->ui->notify(
+                ($language !== '' ? "No language server is configured for {$language}." : 'Every language server this project needs is installed.')
+                . ($missing !== [] ? ' Not installed: ' . implode(', ', $missing) . ' — /lsp-install <language>.' : ''),
+                'info',
+            );
+
+            return;
+        }
+
+        foreach ($keys as $key) {
+            if ($config->command($key) !== null) {
+                $ctx->ui->notify("The {$key} language server is already installed: " . implode(' ', $config->command($key)), 'info');
+
+                continue;
+            }
+
+            $outcome = $this->installer->offer($key, $config, $ctx, null, true);
+
+            if ($outcome['state'] === Installer::INSTALLED) {
+                $this->reconfigureAll();
+                $config = $manager->config();
+            } elseif ($outcome['state'] === Installer::UNAVAILABLE) {
+                $ctx->ui->notify("pig-lsp cannot install the {$key} language server itself: " . self::hintOnly($config->installHint($key)), 'warning');
+            } elseif ($outcome['state'] === Installer::NO_UI) {
+                $ctx->ui->notify("Installing needs someone to confirm it; run /lsp-install {$key} in an interactive session.", 'warning');
+            }
+            // Installed, declined and failed have been reported by the installer, or need no word.
+        }
+
+        $this->updateStatus($ctx);
+    }
+
+    /** After an install: every manager looks for servers again, in the new directories too. */
+    private function reconfigureAll(): void
+    {
+        foreach ($this->managers as $cwd => $manager) {
+            $manager->reconfigure($this->config((string) $cwd));
+        }
     }
 
     public function lastManager(): ?LspManager
@@ -268,7 +400,7 @@ final class Extension
 
         foreach ($config->serverKeys() as $key) {
             $command = $config->command($key);
-            $available[] = $key . ': ' . ($command !== null ? implode(' ', $command) : 'not installed');
+            $available[] = $key . ': ' . ($command !== null ? implode(' ', $command) : 'not installed' . $this->installState($key, $config));
         }
 
         $out[] = '';
@@ -280,6 +412,24 @@ final class Extension
         }
 
         return implode("\n", $out);
+    }
+
+    /** Why a missing server is still missing, for `/lsp`. */
+    private function installState(string $key, Config $config): string
+    {
+        $outcome = $this->installer->outcome($key);
+
+        if ($outcome !== null && $outcome['state'] === Installer::DECLINED) {
+            return " (install declined this session — /lsp-install {$key})";
+        }
+
+        if ($outcome !== null && $outcome['state'] === Installer::FAILED) {
+            return ' (install failed: ' . str_replace("\n", ' / ', trim($outcome['detail'])) . " — /lsp-install {$key})";
+        }
+
+        $option = $config->installOption($key);
+
+        return $option !== null ? " (installable: {$option['display']} — /lsp-install {$key})" : '';
     }
 
     private static function duration(float $seconds): string

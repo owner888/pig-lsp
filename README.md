@@ -10,7 +10,7 @@ Language-server tools for the pig coding agent. grep finds text; these find **sy
 pig install git:github.com/owner888/pig-lsp
 ```
 
-Then install a language server for each language you work in (below). Nothing else: the package has no Composer dependencies.
+Then install a language server for each language you work in (below), or let pig-lsp offer to when it first needs one. Nothing else: the package has no Composer dependencies.
 
 ## Tools
 
@@ -51,6 +51,7 @@ The edit waits for the server's answer (up to 3 s), not for a fixed delay. Serve
 
 - `/lsp` — the running servers, their roots, what they are busy with, and why one failed (with the end of its stderr).
 - `/lsp-restart [language]` — stop all servers (or one), and re-read the configuration. The next query starts them again.
+- `/lsp-install [language]` — install a missing server (asks first, as below). Without a language: the ones this project needs.
 
 ### Skill
 
@@ -58,7 +59,7 @@ The edit waits for the server's answer (up to 3 s), not for a fixed delay. Serve
 
 ## Language servers
 
-The first one found on `PATH` is used.
+The first one found is used: on `PATH`, then in the directories installers put programs in that are often not on it (composer's global `vendor/bin`, `~/go/bin`, `~/.cargo/bin`).
 
 | Language | Server | Install |
 | --- | --- | --- |
@@ -71,7 +72,26 @@ The first one found on `PATH` is used.
 | Go | `gopls` | `go install golang.org/x/tools/gopls@latest` |
 | Java | `jdtls` | `brew install jdtls` |
 
-A tool asked about a file whose server is not installed says so, with the install command.
+### When a server is missing
+
+The first time a tool needs a server that is not installed, pig asks you — once per language per session:
+
+```
+Install phpactor?
+No php language server is installed, so pig falls back to grep for …
+pig-lsp can install phpactor by running:
+    composer global require phpactor/phpactor
+This changes your global composer environment. …
+```
+
+- **Yes**: the command runs in the background (status line `LSP: installing phpactor…`, up to 5 minutes, escape stops it), the server is found — on `PATH`, or where the installer says it put it (`composer global config bin-dir`, `go env GOPATH`, `npm prefix -g`) — and the original query goes on. A server found off `PATH` works anyway (it is started with its directory on its `PATH`, which phpactor needs for diagnostics), and the result suggests adding the directory to your `PATH`.
+- **No**: not asked again this session; the tools tell the model the server is missing and to use grep.
+- **It fails**: the installer's last lines are shown, and it is not tried again this session.
+- Calls that arrive while the question is open wait for the same answer: one question, not one per call.
+- Only a command from the table above is offered, and only when its installer (composer, npm, rustup, go, brew) is itself installed; intelephense is offered when there is no composer for phpactor, jdtls only on macOS, Dart never (install the SDK). A server you configured yourself (`command`) is yours to install. Otherwise the hint is shown instead.
+- Without a UI (`pig -p`, RPC without one) nothing is asked and nothing is installed.
+
+Whatever happened, the model is told not to install a server itself and to fall back to grep, saying its results are textual. `/lsp` shows a missing server as installable, declined or failed; `/lsp-install` asks again.
 
 For PHP, prefer phpactor: it is free and finds implementations of interfaces and interface methods. intelephense's free edition does not offer "go to implementation" (`lsp_implementation` then says so and suggests `lsp_references`). phpactor builds an index of the project in the background after it starts; on a large project the first implementation and reference queries can come back incomplete for a minute (the tools say when the server reports it is still indexing).
 
@@ -105,6 +125,7 @@ Optional. Read from, each overriding the one before:
 | `servers.<language>.settings` | | Answered to `workspace/configuration`, and sent once after start |
 | `servers.<language>.extensions` | | File extensions it serves (for a server that is not built in) |
 | `servers.<language>.rootMarkers` | built in | Files that mark a project root (`composer.json`, `pubspec.yaml`, …) |
+| `servers.<language>.installers` | built in | What `/lsp-install` may run: `[{"binary": "zls", "with": "brew", "command": ["brew", "install", "zls"]}]` — offered only when `with` is installed, and only for a server found through `candidates` (`[["zls"]]`), not a `command` of yours |
 | `servers.<language>.disabled` | `false` | Never start it |
 | `servers.<language>.diagnosticsSettle` | `400` | ms the server must stay quiet before an edit's errors are final |
 | `autoInjectDiagnostics` (or `autoDiagnostics`) | `true` | `true`, `false`, or a list of languages |

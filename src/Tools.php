@@ -30,8 +30,13 @@ final class Tools
         'character' => ['type' => 'integer', 'description' => '1-based column, in characters. Only needed without `query`.'],
     ];
 
-    /** @param Closure(string): LspManager $manager the manager for a working directory */
-    public function __construct(private readonly Closure $manager)
+    /**
+     * @param Closure(string): LspManager $manager the manager for a working directory
+     * @param (Closure(LspNotInstalled, HookContext, ?AbortSignal): string)|null $notInstalled what
+     *        to do when a call finds its server missing: offer to install it and return a note for
+     *        the result (the call is then tried again), or throw the `LspError` the model sees
+     */
+    public function __construct(private readonly Closure $manager, private readonly ?Closure $notInstalled = null)
     {
     }
 
@@ -118,6 +123,16 @@ final class Tools
                 $this->requireProvider(['client' => $client], 'workspaceSymbolProvider', 'workspace symbol search');
                 $client->refreshOpenDocuments();
                 $result = $client->request('workspace/symbol', ['query' => $query], null, $signal);
+            } catch (LspNotInstalled $error) {
+                // Alone, it is the call's answer, and the install offer goes with it; next to
+                // servers that did answer, it is a line — not a dialog in the middle of a search.
+                if (count($keys) === 1) {
+                    throw $error;
+                }
+
+                $problems[] = "No {$key} language server is installed.";
+
+                continue;
             } catch (LspUnavailable | LspError $error) {
                 $problems[] = $error->getMessage();
 
@@ -301,15 +316,29 @@ final class Tools
      */
     public function definitions(Closure $diagnosticsWait, Closure $afterCall): array
     {
-        $tool = function (string $name, string $label, string $description, array $properties, array $required, Closure $run) use ($afterCall): CustomTool {
+        $notInstalled = $this->notInstalled;
+        $tool = function (string $name, string $label, string $description, array $properties, array $required, Closure $run) use ($afterCall, $notInstalled): CustomTool {
             return new CustomTool(
                 name: $name,
                 label: $label,
                 description: $description,
                 parameters: ['type' => 'object', 'properties' => $properties, 'required' => $required],
-                execute: static function (string $id, array $params, ?Closure $onUpdate, HookContext $ctx, ?AbortSignal $signal = null) use ($run, $afterCall): AgentToolResult {
+                execute: static function (string $id, array $params, ?Closure $onUpdate, HookContext $ctx, ?AbortSignal $signal = null) use ($run, $afterCall, $notInstalled): AgentToolResult {
                     try {
-                        return new AgentToolResult([new TextContent($run($params, $ctx->cwd, $signal))]);
+                        try {
+                            return new AgentToolResult([new TextContent($run($params, $ctx->cwd, $signal))]);
+                        } catch (LspNotInstalled $missing) {
+                            if ($notInstalled === null) {
+                                throw new LspError($missing->getMessage());
+                            }
+
+                            // Installed (or it throws what the model should hear instead): the
+                            // original request goes on as if the server had been there all along.
+                            $note = $notInstalled($missing, $ctx, $signal);
+                            $text = $run($params, $ctx->cwd, $signal);
+
+                            return new AgentToolResult([new TextContent($note !== '' ? $note . "\n\n" . $text : $text)]);
+                        }
                     } finally {
                         $afterCall($ctx);
                     }

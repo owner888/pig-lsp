@@ -273,7 +273,7 @@ final class LspManager
             }
 
             if ($this->config->command($key) === null) {
-                throw new LspUnavailable($this->config->installHint($key));
+                throw new LspNotInstalled($key, $this->config->installHint($key));
             }
 
             $this->begin($key, $root);

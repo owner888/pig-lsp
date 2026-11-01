@@ -90,6 +90,93 @@ final class ConfigTest extends TestCase
         self::assertStringContainsString('phpactor', (new Config($this->root))->installHint('php'));
     }
 
+    public function testAnInstallIsOfferedOnlyWithItsInstallerAtHand(): void
+    {
+        $bin = $this->root . '/bin';
+        mkdir($bin);
+        $path = (string) getenv('PATH');
+
+        foreach (['composer', 'npm'] as $tool) {
+            file_put_contents("{$bin}/{$tool}", "#!/bin/sh\n");
+            chmod("{$bin}/{$tool}", 0o755);
+        }
+
+        try {
+            putenv("PATH={$bin}");
+            $config = new Config($this->root);
+
+            // phpactor first; intelephense only when there is no composer to install phpactor with.
+            self::assertSame(
+                ['binary' => 'phpactor', 'with' => 'composer', 'command' => ["{$bin}/composer", 'global', 'require', 'phpactor/phpactor'], 'display' => 'composer global require phpactor/phpactor'],
+                $config->installOption('php'),
+            );
+            self::assertSame(['npm', 'install', '-g', 'pyright'], explode(' ', $config->installOption('python')['display'] ?? ''));
+            self::assertNull($config->installOption('go'), 'no go on PATH');
+            self::assertNull($config->installOption('dart'), 'nothing structured to run');
+
+            unlink("{$bin}/composer");
+            self::assertSame('intelephense', (new Config($this->root))->installOption('php')['binary'] ?? null);
+
+            // The developer's own command is the developer's to install.
+            file_put_contents($this->root . '/.pig/lsp.json', json_encode(['servers' => ['php' => ['command' => 'my-php-server']]]));
+            self::assertNull((new Config($this->root))->installOption('php'));
+        } finally {
+            putenv("PATH={$path}");
+        }
+    }
+
+    public function testJdtlsIsOfferedThroughBrewOnMacOsOnly(): void
+    {
+        $bin = $this->root . '/bin';
+        mkdir($bin);
+        file_put_contents("{$bin}/brew", "#!/bin/sh\n");
+        chmod("{$bin}/brew", 0o755);
+        $path = (string) getenv('PATH');
+
+        try {
+            putenv("PATH={$bin}");
+            $option = (new Config($this->root))->installOption('java');
+        } finally {
+            putenv("PATH={$path}");
+        }
+
+        self::assertSame(PHP_OS_FAMILY === 'Darwin' ? 'brew install jdtls' : null, $option['display'] ?? null);
+    }
+
+    public function testAServerOffPathIsFoundInAnInstallersDirectoryAndGetsItOnItsPath(): void
+    {
+        $vendor = $this->root . '/vendor/bin';
+        mkdir($vendor, 0o755, true);
+        file_put_contents("{$vendor}/phpactor", "#!/bin/sh\n");
+        chmod("{$vendor}/phpactor", 0o755);
+        $path = (string) getenv('PATH');
+
+        try {
+            putenv('PATH=/nonexistent');
+            self::assertNull((new Config($this->root))->command('php'));
+
+            $config = new Config($this->root, null, [$vendor]);
+            self::assertSame(["{$vendor}/phpactor", 'language-server'], $config->command('php'));
+            // phpactor starts itself again by name for diagnostics.
+            self::assertSame("{$vendor}:/nonexistent", $config->env('php')['PATH']);
+        } finally {
+            putenv("PATH={$path}");
+        }
+
+        $home = (string) getenv('HOME');
+        mkdir("{$home}/.config/composer/vendor/bin", 0o755, true);
+        copy("{$vendor}/phpactor", "{$home}/.config/composer/vendor/bin/phpactor");
+        chmod("{$home}/.config/composer/vendor/bin/phpactor", 0o755);
+
+        try {
+            putenv('PATH=/nonexistent');
+            self::assertSame("{$home}/.config/composer/vendor/bin/phpactor", (new Config($this->root))->command('php')[0] ?? null);
+        } finally {
+            putenv("PATH={$path}");
+            exec('rm -rf ' . escapeshellarg("{$home}/.config"));
+        }
+    }
+
     public function testBrokenJsonIsAProblemNotACrash(): void
     {
         file_put_contents($this->root . '/.pig/lsp.json', '{nope');

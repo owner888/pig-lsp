@@ -25,6 +25,10 @@ final class Config
     /**
      * The built-in servers. `candidates` are tried in order and the first whose executable is on
      * PATH is used; `install` is what the model is told when none is.
+     *
+     * `installers` are what `Installer` may run, once the user has said yes: the command as a list,
+     * never prose, and only the first whose installer (`with`) is itself installed — composer can
+     * install phpactor where npm cannot, and the other way round. `os` limits one to a platform.
      */
     private const array BUILTIN = [
         'php' => [
@@ -35,6 +39,10 @@ final class Config
             // and wants the answer with the edit, so a tenth. intelephense ignores the key.
             'initializationOptions' => ['language_server.diagnostic_sleep_time' => 100],
             'install' => 'Install phpactor (`composer global require phpactor/phpactor`, or download phpactor.phar from its GitHub releases into a directory on PATH as `phpactor`), or intelephense (`npm install -g intelephense`).',
+            'installers' => [
+                ['binary' => 'phpactor', 'with' => 'composer', 'command' => ['composer', 'global', 'require', 'phpactor/phpactor']],
+                ['binary' => 'intelephense', 'with' => 'npm', 'command' => ['npm', 'install', '-g', 'intelephense']],
+            ],
         ],
         'dart' => [
             'languages' => ['dart'],
@@ -47,32 +55,54 @@ final class Config
             'candidates' => [['typescript-language-server', '--stdio']],
             'rootMarkers' => ['tsconfig.json', 'jsconfig.json', 'package.json'],
             'install' => 'Install typescript-language-server: `npm install -g typescript-language-server typescript`.',
+            'installers' => [
+                ['binary' => 'typescript-language-server', 'with' => 'npm', 'command' => ['npm', 'install', '-g', 'typescript-language-server', 'typescript']],
+            ],
         ],
         'python' => [
             'languages' => ['python'],
             'candidates' => [['pyright-langserver', '--stdio'], ['basedpyright-langserver', '--stdio'], ['pylsp']],
             'rootMarkers' => ['pyproject.toml', 'pyrightconfig.json', 'setup.py', 'setup.cfg', 'requirements.txt'],
             'install' => 'Install pyright: `npm install -g pyright` (or `pip install pyright`).',
+            'installers' => [
+                ['binary' => 'pyright-langserver', 'with' => 'npm', 'command' => ['npm', 'install', '-g', 'pyright']],
+            ],
         ],
         'rust' => [
             'languages' => ['rust'],
             'candidates' => [['rust-analyzer']],
             'rootMarkers' => ['Cargo.toml'],
             'install' => 'Install rust-analyzer: `rustup component add rust-analyzer`.',
+            'installers' => [
+                ['binary' => 'rust-analyzer', 'with' => 'rustup', 'command' => ['rustup', 'component', 'add', 'rust-analyzer']],
+            ],
         ],
         'go' => [
             'languages' => ['go'],
             'candidates' => [['gopls']],
             'rootMarkers' => ['go.work', 'go.mod'],
             'install' => 'Install gopls: `go install golang.org/x/tools/gopls@latest` (and make sure `$(go env GOPATH)/bin` is on PATH).',
+            'installers' => [
+                ['binary' => 'gopls', 'with' => 'go', 'command' => ['go', 'install', 'golang.org/x/tools/gopls@latest']],
+            ],
         ],
         'java' => [
             'languages' => ['java'],
             'candidates' => [['jdtls']],
             'rootMarkers' => ['pom.xml', 'build.gradle', 'build.gradle.kts', 'settings.gradle', 'settings.gradle.kts'],
             'install' => 'Install Eclipse JDT Language Server and put its `jdtls` launcher on PATH (`brew install jdtls` on macOS).',
+            'installers' => [
+                ['binary' => 'jdtls', 'with' => 'brew', 'command' => ['brew', 'install', 'jdtls'], 'os' => 'Darwin'],
+            ],
         ],
     ];
+
+    /**
+     * Where installers put programs that are often not on PATH: composer's global bin, go's, cargo's.
+     * A server installed there — by `Installer` in an earlier session, or by hand — is still found,
+     * and started with that directory on its PATH (see `env()`), rather than reported missing.
+     */
+    private const array INSTALLER_BIN_DIRS = ['~/.composer/vendor/bin', '~/.config/composer/vendor/bin', '~/go/bin', '~/.cargo/bin'];
 
     /** File extension → LSP language id; upstream's table plus Dart and PHP templates. */
     private const array EXTENSIONS = [
@@ -110,8 +140,10 @@ final class Config
 
     /**
      * @param array<string, mixed>|null $settings the `lsp` key of pig's settings
+     * @param list<string> $binDirs more places to look for a server, ahead of the usual installer
+     *        directories: those an install in this session reported (`Installer::binDirs()`)
      */
-    public function __construct(public readonly string $cwd, ?array $settings = null)
+    public function __construct(public readonly string $cwd, ?array $settings = null, private readonly array $binDirs = [])
     {
         $layers = [];
         $sources = [];
@@ -227,13 +259,17 @@ final class Config
 
         if (is_string($spec['command'] ?? null) && $spec['command'] !== '') {
             $args = array_values(array_map('strval', is_array($spec['args'] ?? null) ? $spec['args'] : []));
-            $binary = self::which($spec['command'], $this->cwd);
+            $binary = $this->find($spec['command']);
 
             return $binary !== null ? [$binary, ...$args] : null;
         }
 
         foreach (is_array($spec['candidates'] ?? null) ? $spec['candidates'] : [] as $candidate) {
-            $binary = self::which($candidate[0], $this->cwd);
+            if (!is_array($candidate) || !is_string($candidate[0] ?? null)) {
+                continue;
+            }
+
+            $binary = $this->find($candidate[0]);
 
             if ($binary !== null) {
                 return [$binary, ...array_slice($candidate, 1)];
@@ -241,6 +277,103 @@ final class Config
         }
 
         return null;
+    }
+
+    /**
+     * What may be run to install $key's server: the first of its `installers` whose installer is
+     * itself installed (and for this OS), with the installer's full path. Null when there is
+     * none — no structured command, the developer's own `command` (theirs to install), or no composer,
+     * npm, go, rustup or brew to run it with.
+     *
+     * @return array{binary: string, with: string, command: list<string>, display: string}|null
+     */
+    public function installOption(string $key): ?array
+    {
+        $spec = $this->servers[$key] ?? [];
+
+        if (is_string($spec['command'] ?? null) && $spec['command'] !== '') {
+            return null;
+        }
+
+        foreach (is_array($spec['installers'] ?? null) ? $spec['installers'] : [] as $option) {
+            if (!is_array($option) || !is_string($option['binary'] ?? null) || !is_string($option['with'] ?? null) || !is_array($option['command'] ?? null) || $option['command'] === []) {
+                continue;
+            }
+
+            if (is_string($option['os'] ?? null) && $option['os'] !== PHP_OS_FAMILY) {
+                continue;
+            }
+
+            $installer = $this->find($option['with']);
+
+            if ($installer === null) {
+                continue;
+            }
+
+            $command = array_values(array_map('strval', $option['command']));
+
+            return [
+                'binary' => $option['binary'],
+                'with' => $option['with'],
+                'command' => [$installer, ...array_slice($command, 1)],
+                'display' => implode(' ', $command),
+            ];
+        }
+
+        return null;
+    }
+
+    /**
+     * $command's full path: PATH first, then the directories installers use that often are not on
+     * it. Null when it is in neither.
+     */
+    public function find(string $command): ?string
+    {
+        $found = self::which($command, $this->cwd);
+
+        if ($found !== null || $command === '' || str_contains($command, '/')) {
+            return $found;
+        }
+
+        foreach ($this->binDirectories() as $directory) {
+            $path = $directory . '/' . $command;
+
+            if (is_file($path) && is_executable($path)) {
+                return $path;
+            }
+        }
+
+        return null;
+    }
+
+    /** Whether $directory is one of PATH's. */
+    public static function onPath(string $directory): bool
+    {
+        foreach (explode(PATH_SEPARATOR, (string) getenv('PATH')) as $entry) {
+            if ($entry !== '' && rtrim($entry, '/') === rtrim($directory, '/')) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** @return list<string> the off-PATH places `find()` looks, $binDirs first */
+    private function binDirectories(): array
+    {
+        $home = rtrim((string) getenv('HOME'), '/');
+        $directories = [];
+
+        foreach ([...$this->binDirs, ...self::INSTALLER_BIN_DIRS] as $directory) {
+            $directory = str_starts_with($directory, '~/') ? $home . substr($directory, 1) : $directory;
+            $directory = rtrim($directory, '/');
+
+            if ($directory !== '' && !in_array($directory, $directories, true)) {
+                $directories[] = $directory;
+            }
+        }
+
+        return $directories;
     }
 
     /** What to tell the model when $key's server is not installed. */
@@ -252,7 +385,7 @@ final class Config
             : array_map(static fn (array $candidate): string => $candidate[0], is_array($spec['candidates'] ?? null) ? $spec['candidates'] : []);
         $hint = is_string($spec['install'] ?? null) ? $spec['install'] : "Set `servers.{$key}.command` in `.pig/lsp.json` or the `lsp` setting.";
 
-        return "No {$key} language server found on PATH (looked for: " . implode(', ', $tried) . "). {$hint}";
+        return "No {$key} language server is installed (looked on PATH and in installers' bin directories for: " . implode(', ', $tried) . "). {$hint}";
     }
 
     /**
@@ -293,12 +426,24 @@ final class Config
         return $insideCwd ? $cwd : dirname($path);
     }
 
-    /** @return array<string, string> */
+    /**
+     * The server's environment additions. A server found off PATH (an installer's directory) gets
+     * that directory put in front of its PATH: phpactor checks a file by starting `phpactor` again,
+     * by name, and found nowhere that second time it reports nothing — every file clean.
+     *
+     * @return array<string, string>
+     */
     public function env(string $key): array
     {
         $env = $this->servers[$key]['env'] ?? [];
+        $env = is_array($env) ? array_map('strval', $env) : [];
+        $command = $this->command($key);
 
-        return is_array($env) ? array_map('strval', $env) : [];
+        if ($command !== null && !isset($env['PATH']) && !self::onPath(dirname($command[0]))) {
+            $env['PATH'] = dirname($command[0]) . PATH_SEPARATOR . (string) getenv('PATH');
+        }
+
+        return $env;
     }
 
     public function initializationOptions(string $key): mixed
