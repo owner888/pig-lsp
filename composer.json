@@ -1,0 +1,25 @@
+{
+    "name": "owner888/pig-lsp",
+    "description": "Language server tools for the pig coding agent: go to definition, find references and implementations, hover, symbols, diagnostics after every edit, rename preview and code actions.",
+    "type": "library",
+    "license": "MIT",
+    "keywords": ["pig", "pig-package", "lsp", "language-server", "phpactor", "intelephense", "dart", "coding-agent"],
+    "authors": [
+        {"name": "the developer"}
+    ],
+    "require": {
+        "php": ">=8.3",
+        "ext-mbstring": "*"
+    },
+    "autoload": {
+        "psr-4": {
+            "PigLsp\\": "src/"
+        }
+    },
+    "extra": {
+        "pig": {
+            "extensions": ["./extensions/lsp.php"],
+            "skills": ["./skills"]
+        }
+    }
+}
