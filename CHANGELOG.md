@@ -4,6 +4,13 @@ What changed, newest first, in pig's format: `## [x.y.z] - YYYY-MM-DD`, then onl
 have entries (`### New Features`, `### Added`, `### Changed`, `### Fixed`). Notes under
 `## Unreleased` belong to no version yet; the version itself lives in the git tag.
 
+## [0.3.0] - 2026-11-01
+
+### Changed
+
+- A file whose language has no project marker above it (`composer.json`, `pubspec.yaml`, `go.mod`, …) takes the git repository it is in as its root, so an old project without composer is indexed whole instead of one directory at a time.
+- A file in no project at all — no marker and no git repository — gets no server: the tools say so and send the model to grep, since one directory indexed on its own gives answers with blind spots that read like answers. An empty `.phpactor.json` or `git init` at the root brings the server back; a server configured with `"rootMarkers": []` runs anywhere as before.
+
 ## [0.2.0] - 2026-11-01
 
 ### New Features

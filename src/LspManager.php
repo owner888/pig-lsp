@@ -90,7 +90,14 @@ final class LspManager
             return null;
         }
 
-        $client = $this->clients[$this->id($key, $this->config->rootFor($key, $path))] ?? null;
+        try {
+            $root = $this->config->rootFor($key, $path);
+        } catch (LspNoProject) {
+            // Not in a project, so no server for it — and an edit is not the place to say so.
+            return null;
+        }
+
+        $client = $this->clients[$this->id($key, $root)] ?? null;
 
         return $client !== null && $client->running() ? ['client' => $client, 'languageId' => $languageId, 'key' => $key] : null;
     }

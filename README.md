@@ -140,7 +140,9 @@ A project's `.pig/lsp.json` can name any command to run, like the rest of a proj
 
 ### Roots
 
-One server per language and project root. The root is the working directory when it is a project of that language (it has `composer.json`, `pubspec.yaml`, …); otherwise the nearest directory above the file with one — so a Flutter app in `app/` of a PHP repository gets a Dart server rooted at `app/`.
+One server per language and project root. The root is the working directory when it is a project of that language (it has `composer.json`, `pubspec.yaml`, …); otherwise the nearest directory above the file with one — so a Flutter app in `app/` of a PHP repository gets a Dart server rooted at `app/`. With none of those, the git repository the file is in (`.git`, a directory or a worktree's file) is the root.
+
+A file in neither — no marker of its language and no git repository above it — gets no server: on its own, one directory gives answers with blind spots that read like answers, so the tools say so and the model uses grep instead. Add the marker (an empty `.phpactor.json` will do for PHP) or `git init` at the project's root to have one. A server you configure with `"rootMarkers": []` runs anywhere, as before.
 
 ## How it works
 

@@ -203,7 +203,43 @@ final class ConfigTest extends TestCase
         $config = new Config($this->root);
 
         self::assertSame($this->root . '/app', $config->rootFor('dart', $this->root . '/app/lib/main.dart'));
-        self::assertSame($this->root, $config->rootFor('go', $this->root . '/app/lib/x.go'));
+    }
+
+    public function testWithoutAMarkerTheGitRepositoryIsTheRoot(): void
+    {
+        // A project without composer.json — an old include-based PHP server — that is in git.
+        mkdir($this->root . '/legacy/lib', 0o755, true);
+        mkdir($this->root . '/legacy/.git');
+        $config = new Config($this->root);
+
+        self::assertSame($this->root . '/legacy', $config->rootFor('php', $this->root . '/legacy/lib/db.php'));
+
+        // A worktree or a submodule has a `.git` file, not a directory; it counts the same.
+        mkdir($this->root . '/wt/src', 0o755, true);
+        file_put_contents($this->root . '/wt/.git', "gitdir: /elsewhere\n");
+        self::assertSame($this->root . '/wt', $config->rootFor('php', $this->root . '/wt/src/a.php'));
+    }
+
+    public function testWithNoMarkerAndNoRepositoryThereIsNoServerAndTheModelIsSentToGrep(): void
+    {
+        mkdir($this->root . '/loose', 0o755, true);
+        $config = new Config($this->root);
+
+        try {
+            $config->rootFor('go', $this->root . '/loose/x.go');
+            self::fail('a file in no project got a root');
+        } catch (\PigLsp\LspNoProject $e) {
+            self::assertStringContainsString('go.mod', $e->getMessage());
+            self::assertStringContainsString('use grep', $e->getMessage());
+        }
+    }
+
+    public function testAServerConfiguredWithoutRootMarkersRunsAnywhere(): void
+    {
+        file_put_contents($this->root . '/.pig/lsp.json', json_encode(['servers' => ['go' => ['rootMarkers' => []]]]));
+        mkdir($this->root . '/loose', 0o755, true);
+
+        self::assertSame($this->root, (new Config($this->root))->rootFor('go', $this->root . '/loose/x.go'));
     }
 
     public function testDiagnosticsAreOnByDefault(): void

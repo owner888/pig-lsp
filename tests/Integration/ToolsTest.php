@@ -214,6 +214,8 @@ final class ToolsTest extends TestCase
         });
 
         $this->project->writeConfig(options: ['servers' => ['dart' => ['command' => 'no-such-dart-binary']]]);
+        // A Dart project, so the missing server is what is reported, not a missing project.
+        $this->project->write('pubspec.yaml', "name: demo\n");
 
         $this->expectException(LspUnavailable::class);
         $this->expectExceptionMessage('Install the Dart SDK');

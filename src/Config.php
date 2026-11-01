@@ -392,7 +392,15 @@ final class Config
      * The workspace root for $path: the project directory when it is a project of this language
      * (one server for the whole project, as upstream had), otherwise the nearest directory above
      * the file holding one of the server's root markers — a file outside the project gets its own
-     * root instead of being forced into one that knows nothing about it.
+     * root instead of being forced into one that knows nothing about it — and failing that, the
+     * git repository the file is in.
+     *
+     * With none of those there is no root, and no server: the developer's rule. A server pointed at
+     * a bare directory indexes only that directory, and its "no implementation found" looks like an
+     * answer when it is a blind spot — grep at least says what it is. A server configured without
+     * any root markers is one its user meant to run anywhere, and keeps the old fallback.
+     *
+     * @throws LspNoProject when the file is in no project the server could index
      */
     public function rootFor(string $key, string $path): string
     {
@@ -403,12 +411,34 @@ final class Config
         $cwd = rtrim($this->cwd, '/');
         $insideCwd = str_starts_with($path, $cwd . '/');
 
-        if ($insideCwd && ($markers === [] || self::hasMarker($cwd, $markers))) {
+        if ($markers === []) {
+            return $insideCwd ? $cwd : dirname($path);
+        }
+
+        if ($insideCwd && self::hasMarker($cwd, $markers)) {
             return $cwd;
         }
 
-        $directory = dirname($path);
+        return self::nearest(dirname($path), $markers)
+            ?? self::nearest(dirname($path), ['.git'])
+            ?? throw new LspNoProject(sprintf(
+                'No project around %s for the %s language server: none of %s, nor a git repository, in its directory or above. '
+                . 'Indexed on its own, a lone directory gives answers with blind spots that look like answers, so no server is started — '
+                . 'use grep and read, and say the results are textual. To use the server here, add one of those files (or `git init`) at the project root.',
+                $path,
+                $key,
+                implode(', ', $markers),
+            ));
+    }
 
+    /**
+     * The nearest directory from $directory upward holding one of $markers, or null. `.git` is a
+     * directory in a clone and a file in a worktree or submodule; either counts.
+     *
+     * @param list<string> $markers
+     */
+    private static function nearest(string $directory, array $markers): ?string
+    {
         while (true) {
             if (self::hasMarker($directory, $markers)) {
                 return $directory;
@@ -416,14 +446,12 @@ final class Config
 
             $parent = dirname($directory);
 
-            if ($parent === $directory || ($insideCwd && $directory === $cwd)) {
-                break;
+            if ($parent === $directory) {
+                return null;
             }
 
             $directory = $parent;
         }
-
-        return $insideCwd ? $cwd : dirname($path);
     }
 
     /**
