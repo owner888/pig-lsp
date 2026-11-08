@@ -7,7 +7,7 @@ namespace PigLsp;
 use Pig\Async\AbortSignal;
 use Pig\Async\Async;
 use Pig\Async\Future;
-use Pig\CodingAgent\Hooks\HookContext;
+use Pig\CodingAgent\Extensions\ExtensionContext;
 use Pig\Tui\Process;
 use Throwable;
 
@@ -81,7 +81,7 @@ final class Installer
      *        `/lsp-install`, where the user is the one asking
      * @return array{state: string, detail: string} `detail` is the installed binary's path, or what went wrong
      */
-    public function offer(string $key, Config $config, HookContext $ctx, ?AbortSignal $signal = null, bool $again = false): array
+    public function offer(string $key, Config $config, ExtensionContext $ctx, ?AbortSignal $signal = null, bool $again = false): array
     {
         $decided = $this->outcomes[$key] ?? null;
 
@@ -121,7 +121,7 @@ final class Installer
      * @param array{binary: string, with: string, command: list<string>, display: string} $option
      * @return array{state: string, detail: string}
      */
-    private function askAndInstall(string $key, array $option, Config $config, HookContext $ctx, ?AbortSignal $signal): array
+    private function askAndInstall(string $key, array $option, Config $config, ExtensionContext $ctx, ?AbortSignal $signal): array
     {
         $languages = implode('/', array_map('strval', (array) ($config->server($key)['languages'] ?? [$key])));
         $yes = $ctx->ui->confirm(

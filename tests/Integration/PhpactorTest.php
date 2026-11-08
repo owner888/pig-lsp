@@ -9,9 +9,9 @@ use Pig\Ai\TextContent;
 use Pig\Async\Async;
 use Pig\CodingAgent\Extensions\ExtensionApi;
 use Pig\CodingAgent\Extensions\ExtensionLoader;
-use Pig\CodingAgent\Hooks\Events\SessionShutdownEvent;
-use Pig\CodingAgent\Hooks\Events\ToolResultEvent;
-use Pig\CodingAgent\Hooks\HookContext;
+use Pig\CodingAgent\Extensions\Events\SessionShutdownEvent;
+use Pig\CodingAgent\Extensions\Events\ToolResultEvent;
+use Pig\CodingAgent\Extensions\ExtensionContext;
 use PigLsp\Config;
 
 /**
@@ -30,7 +30,7 @@ final class PhpactorTest extends TestCase
 
     private static ExtensionApi $api;
 
-    private static HookContext $ctx;
+    private static ExtensionContext $ctx;
 
     public static function setUpBeforeClass(): void
     {
@@ -73,7 +73,7 @@ final class PhpactorTest extends TestCase
         [$loaded, $errors] = ExtensionLoader::load($root, cliPaths: [dirname(__DIR__, 2) . '/extensions/lsp.php'], home: $root . '/.home', discover: false);
         self::assertSame([], $errors);
         self::$api = $loaded[0]->api;
-        self::$ctx = new HookContext($root);
+        self::$ctx = new ExtensionContext($root);
     }
 
     public static function tearDownAfterClass(): void

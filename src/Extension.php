@@ -8,9 +8,9 @@ use Fiber;
 use Pig\Ai\TextContent;
 use Pig\Async\AbortSignal;
 use Pig\CodingAgent\Extensions\ExtensionApi;
-use Pig\CodingAgent\Hooks\Events\ToolResultEvent;
-use Pig\CodingAgent\Hooks\HookContext;
-use Pig\CodingAgent\Hooks\Results\ToolResultEventResult;
+use Pig\CodingAgent\Extensions\Events\ToolResultEvent;
+use Pig\CodingAgent\Extensions\ExtensionContext;
+use Pig\CodingAgent\Extensions\Results\ToolResultEventResult;
 use Throwable;
 
 /**
@@ -29,43 +29,43 @@ final class Extension
 
     private readonly Installer $installer;
 
-    public function __construct(private readonly ExtensionApi $pi)
+    public function __construct(private readonly ExtensionApi $pig)
     {
         $this->installer = new Installer();
     }
 
-    public static function register(ExtensionApi $pi): self
+    public static function register(ExtensionApi $pig): self
     {
-        $extension = new self($pi);
+        $extension = new self($pig);
         $tools = new Tools(
             fn (string $cwd): LspManager => $extension->manager($cwd),
-            fn (LspNotInstalled $missing, HookContext $ctx, ?AbortSignal $signal): string => $extension->notInstalled($missing, $ctx, $signal),
+            fn (LspNotInstalled $missing, ExtensionContext $ctx, ?AbortSignal $signal): string => $extension->notInstalled($missing, $ctx, $signal),
         );
 
         foreach ($tools->definitions(
             fn (): float => $extension->lastManager()?->config()->diagnosticsWait() ?? 3.0,
-            fn (HookContext $ctx) => $extension->updateStatus($ctx),
+            fn (ExtensionContext $ctx) => $extension->updateStatus($ctx),
         ) as $tool) {
-            $pi->registerTool($tool);
+            $pig->registerTool($tool);
         }
 
-        $pi->on('tool_result', fn (ToolResultEvent $event, HookContext $ctx): ?ToolResultEventResult => $extension->onToolResult($event, $ctx));
+        $pig->on('tool_result', fn (ToolResultEvent $event, ExtensionContext $ctx): ?ToolResultEventResult => $extension->onToolResult($event, $ctx));
 
-        $pi->on('session_start', function (mixed $event, HookContext $ctx) use ($extension): void {
+        $pig->on('session_start', function (mixed $event, ExtensionContext $ctx) use ($extension): void {
             foreach ($extension->manager($ctx->cwd)->config()->autoStart() as $key) {
                 $extension->manager($ctx->cwd)->prestart($key);
             }
         });
 
-        $pi->on('session_shutdown', function () use ($extension): void {
+        $pig->on('session_shutdown', function () use ($extension): void {
             $extension->shutdown();
         });
 
-        $pi->registerCommand('lsp', function (string $args, HookContext $ctx) use ($extension): void {
+        $pig->registerCommand('lsp', function (string $args, ExtensionContext $ctx) use ($extension): void {
             $ctx->ui->notify($extension->statusReport($ctx->cwd), 'info');
         }, 'Language servers: which are running, for which project, and why one failed');
 
-        $pi->registerCommand('lsp-restart', function (string $args, HookContext $ctx) use ($extension): void {
+        $pig->registerCommand('lsp-restart', function (string $args, ExtensionContext $ctx) use ($extension): void {
             $key = trim($args);
             $manager = $extension->manager($ctx->cwd);
             $stopped = $manager->restart($key !== '' ? $key : null);
@@ -80,7 +80,7 @@ final class Extension
             );
         }, 'Stop language servers (all, or one: /lsp-restart php) and re-read the configuration');
 
-        $pi->registerCommand('lsp-install', function (string $args, HookContext $ctx) use ($extension): void {
+        $pig->registerCommand('lsp-install', function (string $args, ExtensionContext $ctx) use ($extension): void {
             $extension->installCommand(trim($args), $ctx);
         }, 'Install a missing language server (asks first): /lsp-install php');
 
@@ -125,7 +125,7 @@ final class Extension
      *         goes on); otherwise this throws what the model should be told
      * @throws LspError
      */
-    public function notInstalled(LspNotInstalled $missing, HookContext $ctx, ?AbortSignal $signal = null): string
+    public function notInstalled(LspNotInstalled $missing, ExtensionContext $ctx, ?AbortSignal $signal = null): string
     {
         $config = $this->manager($ctx->cwd)->config();
         $outcome = $this->installer->offer($missing->key, $config, $ctx, $signal);
@@ -183,7 +183,7 @@ final class Extension
     }
 
     /** `/lsp-install [language]`: the user asks for it, so it is asked again even after a no. */
-    public function installCommand(string $language, HookContext $ctx): void
+    public function installCommand(string $language, ExtensionContext $ctx): void
     {
         $manager = $this->manager($ctx->cwd);
         $config = $manager->config();
@@ -256,7 +256,7 @@ final class Extension
      * After pig's own file tools: keep the servers' copies current, and append the errors an
      * edit introduced while the server for that language is running.
      */
-    public function onToolResult(ToolResultEvent $event, HookContext $ctx): ?ToolResultEventResult
+    public function onToolResult(ToolResultEvent $event, ExtensionContext $ctx): ?ToolResultEventResult
     {
         if ($event->isError || !in_array($event->toolName, ['read', 'write', 'edit'], true)) {
             return null;
@@ -335,7 +335,7 @@ final class Extension
         return $text;
     }
 
-    public function updateStatus(HookContext $ctx): void
+    public function updateStatus(ExtensionContext $ctx): void
     {
         $manager = $this->managers[rtrim($ctx->cwd, '/') ?: '/'] ?? null;
         $running = $manager?->runningClients() ?? [];

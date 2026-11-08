@@ -5,15 +5,15 @@ declare(strict_types=1);
 namespace PigLsp\Test;
 
 use Closure;
-use Pig\CodingAgent\Hooks\HookUi;
+use Pig\CodingAgent\Extensions\ExtensionUi;
 use Pig\CodingAgent\Theme\Theme;
 use Pig\CodingAgent\Theme\Themes;
 
 /**
- * A `HookUi` that answers confirmations as told and writes down what it was asked and told — the
+ * A `ExtensionUi` that answers confirmations as told and writes down what it was asked and told — the
  * user in front of the install question. pig's own test UI says no to everything, and is final.
  */
-final class AnsweringUi implements HookUi
+final class AnsweringUi implements ExtensionUi
 {
     /** @var list<bool> what the next confirmations answer, in order; no once they run out */
     public array $answers = [];

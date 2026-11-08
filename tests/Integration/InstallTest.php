@@ -9,8 +9,8 @@ use Pig\Async\Async;
 use Pig\CodingAgent\CustomTools\CustomTool;
 use Pig\CodingAgent\Extensions\ExtensionApi;
 use Pig\CodingAgent\Extensions\ExtensionLoader;
-use Pig\CodingAgent\Hooks\Events\SessionShutdownEvent;
-use Pig\CodingAgent\Hooks\HookContext;
+use Pig\CodingAgent\Extensions\Events\SessionShutdownEvent;
+use Pig\CodingAgent\Extensions\ExtensionContext;
 use PigLsp\Config;
 use PigLsp\LspError;
 use PigLsp\Test\AnsweringUi;
@@ -28,7 +28,7 @@ final class InstallTest extends TestCase
 
     private AnsweringUi $ui;
 
-    private HookContext $ctx;
+    private ExtensionContext $ctx;
 
     /** On PATH: the fake composer. */
     private string $bin;
@@ -74,7 +74,7 @@ final class InstallTest extends TestCase
         self::assertSame([], $errors);
         $this->api = $loaded[0]->api;
         $this->ui = new AnsweringUi();
-        $this->ctx = new HookContext($this->project->root, ui: $this->ui, hasUi: true);
+        $this->ctx = new ExtensionContext($this->project->root, ui: $this->ui, hasUi: true);
     }
 
     protected function tearDown(): void
@@ -197,7 +197,7 @@ final class InstallTest extends TestCase
 
     public function testWithoutAUserNothingIsAskedOrInstalled(): void
     {
-        $this->ctx = new HookContext($this->project->root, ui: $this->ui, hasUi: false);
+        $this->ctx = new ExtensionContext($this->project->root, ui: $this->ui, hasUi: false);
 
         $message = $this->failure();
 

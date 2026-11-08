@@ -10,7 +10,7 @@ use Pig\Agent\ToolReplay;
 use Pig\Ai\TextContent;
 use Pig\Async\AbortSignal;
 use Pig\CodingAgent\CustomTools\CustomTool;
-use Pig\CodingAgent\Hooks\HookContext;
+use Pig\CodingAgent\Extensions\ExtensionContext;
 
 /**
  * The `lsp_*` tools: what each asks the server, and how the answer reads.
@@ -32,7 +32,7 @@ final class Tools
 
     /**
      * @param Closure(string): LspManager $manager the manager for a working directory
-     * @param (Closure(LspNotInstalled, HookContext, ?AbortSignal): string)|null $notInstalled what
+     * @param (Closure(LspNotInstalled, ExtensionContext, ?AbortSignal): string)|null $notInstalled what
      *        to do when a call finds its server missing: offer to install it and return a note for
      *        the result (the call is then tried again), or throw the `LspError` the model sees
      */
@@ -311,7 +311,7 @@ final class Tools
 
     /**
      * @param Closure(): float $diagnosticsWait
-     * @param Closure(HookContext): void $afterCall run after every call (the status line)
+     * @param Closure(ExtensionContext): void $afterCall run after every call (the status line)
      * @return list<CustomTool>
      */
     public function definitions(Closure $diagnosticsWait, Closure $afterCall): array
@@ -323,7 +323,7 @@ final class Tools
                 label: $label,
                 description: $description,
                 parameters: ['type' => 'object', 'properties' => $properties, 'required' => $required],
-                execute: static function (string $id, array $params, ?Closure $onUpdate, HookContext $ctx, ?AbortSignal $signal = null) use ($run, $afterCall, $notInstalled): AgentToolResult {
+                execute: static function (string $id, array $params, ?Closure $onUpdate, ExtensionContext $ctx, ?AbortSignal $signal = null) use ($run, $afterCall, $notInstalled): AgentToolResult {
                     try {
                         try {
                             return new AgentToolResult([new TextContent($run($params, $ctx->cwd, $signal))]);

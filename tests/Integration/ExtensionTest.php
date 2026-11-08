@@ -10,10 +10,10 @@ use Pig\Async\Async;
 use Pig\CodingAgent\CustomTools\CustomTool;
 use Pig\CodingAgent\Extensions\ExtensionApi;
 use Pig\CodingAgent\Extensions\ExtensionLoader;
-use Pig\CodingAgent\Hooks\Events\SessionShutdownEvent;
-use Pig\CodingAgent\Hooks\Events\ToolResultEvent;
-use Pig\CodingAgent\Hooks\HookContext;
-use Pig\CodingAgent\Hooks\Results\ToolResultEventResult;
+use Pig\CodingAgent\Extensions\Events\SessionShutdownEvent;
+use Pig\CodingAgent\Extensions\Events\ToolResultEvent;
+use Pig\CodingAgent\Extensions\ExtensionContext;
+use Pig\CodingAgent\Extensions\Results\ToolResultEventResult;
 use Pig\CodingAgent\Test\Extensions\NoticingUi;
 use PigLsp\Test\FakeProject;
 
@@ -26,7 +26,7 @@ final class ExtensionTest extends TestCase
 
     private NoticingUi $ui;
 
-    private HookContext $ctx;
+    private ExtensionContext $ctx;
 
     protected function setUp(): void
     {
@@ -44,7 +44,7 @@ final class ExtensionTest extends TestCase
         self::assertCount(1, $loaded);
         $this->api = $loaded[0]->api;
         $this->ui = new NoticingUi();
-        $this->ctx = new HookContext($this->project->root, ui: $this->ui, hasUi: true);
+        $this->ctx = new ExtensionContext($this->project->root, ui: $this->ui, hasUi: true);
     }
 
     protected function tearDown(): void
